@@ -349,10 +349,23 @@ def _estimate_similar_transform_from_pts(
 
 
 def crop_image(img, pts: np.ndarray, **kwargs):
-    dsize = kwargs.get('dsize', 224)
-    scale = kwargs.get('scale', 1.5)  # 1.5 | 1.6
-    vy_ratio = kwargs.get('vy_ratio', -0.1)  # -0.0625 | -0.1
+    """
+    根据关键点对图像进行裁剪。
 
+    :param img: 输入图像。
+    :param pts: 关键点坐标，形状为 (N, 2)，其中 N 是关键点的数量。
+    :param kwargs: 可选参数，包括：
+        dsize: 输出图像的尺寸，默认为 224。
+        scale: 裁剪比例，默认为 1.5。
+        vy_ratio: 垂直方向的偏移比，默认为 -0.1。
+    :return: 包含裁剪后图像、关键点坐标和变换矩阵的字典。
+    """
+    # 解析可选参数
+    dsize = kwargs.get('dsize', 224)  # 输出图像尺寸
+    scale = kwargs.get('scale', 1.5)  # 裁剪比例
+    vy_ratio = kwargs.get('vy_ratio', -0.1)  # 垂直方向的偏移比
+
+    # 估计相似性变换矩阵及其逆矩阵
     M_INV, _ = _estimate_similar_transform_from_pts(
         pts,
         dsize=dsize,
@@ -361,20 +374,25 @@ def crop_image(img, pts: np.ndarray, **kwargs):
         flag_do_rot=kwargs.get('flag_do_rot', True),
     )
 
-    img_crop = _transform_img(img, M_INV, dsize)  # origin to crop
+    # 应用变换矩阵对图像进行裁剪
+    img_crop = _transform_img(img, M_INV, dsize)  # 原始图像到裁剪图像的变换
+
+    # 应用相同的变换矩阵对关键点坐标进行变换
     pt_crop = _transform_pts(pts, M_INV)
 
-    M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=DTYPE)])
-    M_c2o = np.linalg.inv(M_o2c)
+    # 构建完整的 3x3 变换矩阵
+    M_o2c = np.vstack([M_INV, np.array([0, 0, 1], dtype=DTYPE)])  # 原始图像到裁剪图像的变换矩阵
+    M_c2o = np.linalg.inv(M_o2c)  # 裁剪图像到原始图像的逆变换矩阵
 
+    # 构建结果字典
     ret_dct = {
-        'M_o2c': M_o2c,  # from the original image to the cropped image 3x3
-        'M_c2o': M_c2o,  # from the cropped image to the original image 3x3
-        'img_crop': img_crop,  # the cropped image
-        'pt_crop': pt_crop,  # the landmarks of the cropped image
+        'M_o2c': M_o2c,  # 从原始图像到裁剪图像的变换矩阵
+        'M_c2o': M_c2o,  # 从裁剪图像到原始图像的变换矩阵
+        'img_crop': img_crop,  # 裁剪后的图像
+        'pt_crop': pt_crop,  # 裁剪后图像的关键点坐标
     }
 
-    return ret_dct
+    return ret_dct  # 返回结果字典
 
 def average_bbox_lst(bbox_lst):
     if len(bbox_lst) == 0:

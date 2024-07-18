@@ -5,9 +5,13 @@ Pipeline of LivePortrait
 """
 
 import torch
-torch.backends.cudnn.benchmark = True # disable CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR warning
 
-import cv2; cv2.setNumThreads(0); cv2.ocl.setUseOpenCL(False)
+torch.backends.cudnn.benchmark = True  # disable CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR warning
+
+import cv2;
+
+cv2.setNumThreads(0);
+cv2.ocl.setUseOpenCL(False)
 import numpy as np
 import os
 import os.path as osp
@@ -76,9 +80,9 @@ class LivePortraitPipeline(object):
 
     def execute(self, args: ArgumentConfig):
         # for convenience
-        inf_cfg = self.live_portrait_wrapper.inference_cfg
-        device = self.live_portrait_wrapper.device
-        crop_cfg = self.cropper.crop_cfg
+        inf_cfg = self.live_portrait_wrapper.inference_cfg  # 推理配置
+        device = self.live_portrait_wrapper.device  # 设备信息
+        crop_cfg = self.cropper.crop_cfg  # 裁剪配置
 
         ######## load source input ########
         flag_is_source_video = False
@@ -162,10 +166,12 @@ class LivePortraitPipeline(object):
             raise Exception(f"{args.driving} not exists or unsupported driving info types!")
 
         ######## prepare for pasteback ########
+        # 准备用于粘贴回去（pasteback）的帧
         I_p_pstbk_lst = None
         if inf_cfg.flag_pasteback and inf_cfg.flag_do_crop and inf_cfg.flag_stitching:
             I_p_pstbk_lst = []
-            log("Prepared pasteback mask done.")
+            log("粘贴回去的掩码准备完成。")
+        #########################################
 
         I_p_lst = []
         R_d_0, x_d_0_info = None, None

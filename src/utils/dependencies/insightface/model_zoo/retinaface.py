@@ -204,59 +204,90 @@ class RetinaFace:
                 kpss_list.append(pos_kpss)
         return scores_list, bboxes_list, kpss_list
 
-    def detect(self, img, input_size = None, max_num=0, metric='default'):
+    def detect(self, img, input_size=None, max_num=0, metric='default'):
+        """
+        在输入图像中检测人脸。
+
+        :param img: 输入图像。
+        :param input_size: 模型输入尺寸，如果未提供则使用默认尺寸。
+        :param max_num: 最大检测人脸数量，0 表示不限制。
+        :param metric: 排序依据，'default' 或 'max'。
+        :return: 包含检测结果和关键点坐标的元组。
+        """
+        # 确保输入尺寸已定义
         assert input_size is not None or self.input_size is not None
         input_size = self.input_size if input_size is None else input_size
-            
+
+        # 计算图像的高宽比和模型的高宽比
         im_ratio = float(img.shape[0]) / img.shape[1]
         model_ratio = float(input_size[1]) / input_size[0]
-        if im_ratio>model_ratio:
+
+        # 根据比例调整图像尺寸以适应模型输入
+        if im_ratio > model_ratio:
             new_height = input_size[1]
             new_width = int(new_height / im_ratio)
         else:
             new_width = input_size[0]
             new_height = int(new_width * im_ratio)
+
+        # 计算缩放比例
         det_scale = float(new_height) / img.shape[0]
+
+        # 缩放图像
         resized_img = cv2.resize(img, (new_width, new_height))
-        det_img = np.zeros( (input_size[1], input_size[0], 3), dtype=np.uint8 )
+
+        # 创建空白图像并填充调整后的图像
+        det_img = np.zeros((input_size[1], input_size[0], 3), dtype=np.uint8)
         det_img[:new_height, :new_width, :] = resized_img
 
+        # 前向传播获取分数、边界框和关键点信息
         scores_list, bboxes_list, kpss_list = self.forward(det_img, self.det_thresh)
 
+        # 整理输出结果
         scores = np.vstack(scores_list)
         scores_ravel = scores.ravel()
-        order = scores_ravel.argsort()[::-1]
+        order = scores_ravel.argsort()[::-1]  # 降序排序
         bboxes = np.vstack(bboxes_list) / det_scale
         if self.use_kps:
             kpss = np.vstack(kpss_list) / det_scale
+        else:
+            kpss = None
+
+        # 非极大值抑制 (NMS) 筛选边界框
         pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
         pre_det = pre_det[order, :]
         keep = self.nms(pre_det)
         det = pre_det[keep, :]
+
+        # 如果使用关键点，则相应地筛选关键点
         if self.use_kps:
-            kpss = kpss[order,:,:]
-            kpss = kpss[keep,:,:]
-        else:
-            kpss = None
+            kpss = kpss[order, :, :]
+            kpss = kpss[keep, :, :]
+
+        # 如果设置了最大检测数量，则进一步筛选
         if max_num > 0 and det.shape[0] > max_num:
-            area = (det[:, 2] - det[:, 0]) * (det[:, 3] -
-                                                    det[:, 1])
+            # 计算面积和中心偏移
+            area = (det[:, 2] - det[:, 0]) * (det[:, 3] - det[:, 1])
             img_center = img.shape[0] // 2, img.shape[1] // 2
             offsets = np.vstack([
                 (det[:, 0] + det[:, 2]) / 2 - img_center[1],
                 (det[:, 1] + det[:, 3]) / 2 - img_center[0]
             ])
             offset_dist_squared = np.sum(np.power(offsets, 2.0), 0)
-            if metric=='max':
+
+            # 根据排序依据筛选结果
+            if metric == 'max':
                 values = area
             else:
-                values = area - offset_dist_squared * 2.0  # some extra weight on the centering
-            bindex = np.argsort(
-                values)[::-1]  # some extra weight on the centering
+                values = area - offset_dist_squared * 2.0
+
+            bindex = np.argsort(values)[::-1]
             bindex = bindex[0:max_num]
             det = det[bindex, :]
             if kpss is not None:
                 kpss = kpss[bindex, :]
+
+        # 返回检测结果和关键点信息
         return det, kpss
 
     def nms(self, dets):
