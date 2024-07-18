@@ -12,10 +12,25 @@ from .helper import mkdir, suffix
 
 
 def load_image_rgb(image_path: str):
+    """
+    从指定路径加载图像并将其色彩空间从 BGR 转换为 RGB。
+
+    :param image_path: 图像文件的路径。
+    :return: RGB 格式的图像数据。
+    """
+    # 检查图像文件是否存在
     if not osp.exists(image_path):
-        raise FileNotFoundError(f"Image not found: {image_path}")
+        # 如果文件不存在，抛出文件未找到异常
+        raise FileNotFoundError(f"找不到图像文件: {image_path}")
+
+    # 使用 OpenCV 读取图像，以 BGR 彩色模式
     img = cv2.imread(image_path, cv2.IMREAD_COLOR)
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # 将图像从 BGR 色彩空间转换为 RGB
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # 返回 RGB 格式的图像
+    return img_rgb
 
 
 def load_driving_info(driving_info):
@@ -45,36 +60,42 @@ def contiguous(obj):
 
 def resize_to_limit(img: np.ndarray, max_dim=1920, division=2):
     """
-    ajust the size of the image so that the maximum dimension does not exceed max_dim, and the width and the height of the image are multiples of n.
-    :param img: the image to be processed.
-    :param max_dim: the maximum dimension constraint.
-    :param n: the number that needs to be multiples of.
-    :return: the adjusted image.
+    调整图像大小，确保最长边不超过 max_dim，并且图像的宽度和高度是 division 的倍数。
+
+    :param img: 待处理的图像。
+    :param max_dim: 最大尺寸约束。
+    :param division: 图像尺寸需要是该数的倍数。
+    :return: 调整后的图像。
     """
+    # 获取图像的高度和宽度
     h, w = img.shape[:2]
 
-    # ajust the size of the image according to the maximum dimension
+    # 根据最大尺寸调整图像大小
     if max_dim > 0 and max(h, w) > max_dim:
+        # 判断长边是高还是宽，然后根据比例调整另一侧
         if h > w:
-            new_h = max_dim
-            new_w = int(w * (max_dim / h))
+            new_h = max_dim  # 新的高度等于最大尺寸
+            new_w = int(w * (max_dim / h))  # 新的宽度根据高度的比例计算
         else:
-            new_w = max_dim
-            new_h = int(h * (max_dim / w))
+            new_w = max_dim  # 新的宽度等于最大尺寸
+            new_h = int(h * (max_dim / w))  # 新的高度根据宽度的比例计算
+        # 使用 OpenCV 对图像进行缩放
         img = cv2.resize(img, (new_w, new_h))
 
-    # ensure that the image dimensions are multiples of n
-    division = max(division, 1)
-    new_h = img.shape[0] - (img.shape[0] % division)
-    new_w = img.shape[1] - (img.shape[1] % division)
+    # 确保图像的尺寸是 division 的倍数
+    division = max(division, 1)  # 确保 division 至少为 1
+    new_h = img.shape[0] - (img.shape[0] % division)  # 计算新的高度
+    new_w = img.shape[1] - (img.shape[1] % division)  # 计算新的宽度
 
+    # 如果新的高度或宽度为0，说明原尺寸小于 division，不需要处理
     if new_h == 0 or new_w == 0:
-        # when the width or height is less than n, no need to process
         return img
 
+    # 如果新的尺寸与当前图像尺寸不符，进行裁剪
     if new_h != img.shape[0] or new_w != img.shape[1]:
-        img = img[:new_h, :new_w]
+        img = img[:new_h, :new_w]  # 通过切片裁剪图像
 
+    # 返回处理后的图像
     return img
 
 

@@ -14,8 +14,8 @@ from .base_config import PrintableConfig, make_abs_path
 @dataclass(repr=False)  # use repr from PrintableConfig
 class ArgumentConfig(PrintableConfig):
     ########## input arguments ##########
-    source_image: Annotated[str, tyro.conf.arg(aliases=["-s"])] = make_abs_path('../../assets/examples/source/s6.jpg')  # path to the source portrait
-    driving_info:  Annotated[str, tyro.conf.arg(aliases=["-d"])] = make_abs_path('../../assets/examples/driving/d0.mp4')  # path to driving video or template (.pkl format)
+    source_image: Annotated[str, tyro.conf.arg(aliases=["-s"])] = make_abs_path('../../assets/examples/source/3.jpg')  # path to the source portrait
+    driving_info:  Annotated[str, tyro.conf.arg(aliases=["-d"])] = make_abs_path('../../assets/examples/driving/d18.mp4')  # path to driving video or template (.pkl format)
     output_dir: Annotated[str, tyro.conf.arg(aliases=["-o"])] = 'animations/'  # directory to save output video
 
     ########## inference arguments ##########

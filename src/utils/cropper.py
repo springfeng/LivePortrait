@@ -68,44 +68,64 @@ class Cropper(object):
                 setattr(self.crop_cfg, k, v)
 
     def crop_source_image(self, img_rgb_: np.ndarray, crop_cfg: CropConfig):
-        # crop a source image and get neccessary information
-        img_rgb = img_rgb_.copy()  # copy it
+        """
+        裁剪源图像并获取必要信息。
 
+        :param img_rgb_: RGB 格式的源图像。
+        :param crop_cfg: 裁剪配置。
+        :return: 包含裁剪后图像和关键点信息的字典，或 None 若未检测到人脸。
+        """
+        # 复制图像以避免修改原始数据
+        img_rgb = img_rgb_.copy()
+
+        # 将 RGB 图像转换为 BGR，以匹配 OpenCV 的默认色彩空间
         img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+
+        # 使用面部分析工具检测人脸，获取面部信息
         src_face = self.face_analysis_wrapper.get(
             img_bgr,
-            flag_do_landmark_2d_106=True,
-            direction=crop_cfg.direction,
-            max_face_num=crop_cfg.max_face_num,
+            flag_do_landmark_2d_106=True,  # 获取 106 个 2D 关键点
+            direction=crop_cfg.direction,  # 裁剪方向
+            max_face_num=crop_cfg.max_face_num,  # 最大检测人脸数量
         )
 
+        # 检查是否检测到人脸
         if len(src_face) == 0:
-            log("No face detected in the source image.")
-            return None
+            log("在源图像中未检测到人脸。")
+            return None  # 如果没有检测到人脸，返回 None
         elif len(src_face) > 1:
-            log(f"More than one face detected in the image, only pick one face by rule {crop_cfg.direction}.")
+            log(f"图像中检测到多个人脸，仅根据规则 {crop_cfg.direction} 选择一张。")
 
-        # NOTE: temporarily only pick the first face, to support multiple face in the future
+        # 暂时只选取第一张脸，以支持未来处理多张人脸
         src_face = src_face[0]
-        lmk = src_face.landmark_2d_106  # this is the 106 landmarks from insightface
 
-        # crop the face
+        # 获取 106 个面部关键点
+        lmk = src_face.landmark_2d_106
+
+        # 裁剪面部区域
         ret_dct = crop_image(
-            img_rgb,  # ndarray
-            lmk,  # 106x2 or Nx2
-            dsize=crop_cfg.dsize,
-            scale=crop_cfg.scale,
-            vx_ratio=crop_cfg.vx_ratio,
-            vy_ratio=crop_cfg.vy_ratio,
+            img_rgb,  # 原始 RGB 图像
+            lmk,  # 106 个关键点坐标
+            dsize=crop_cfg.dsize,  # 输出图像尺寸
+            scale=crop_cfg.scale,  # 裁剪比例
+            vx_ratio=crop_cfg.vx_ratio,  # X 方向裁剪比例
+            vy_ratio=crop_cfg.vy_ratio,  # Y 方向裁剪比例
         )
+        # 保存裁剪后的图像为 img_crop.jpg
+        # 输出日志
+        log(f"裁剪后的图像已保存为 img_crop.jpg。")
+        cv2.imwrite("img_crop.jpg", ret_dct["img_crop"])
 
+        # 更新关键点信息
         lmk = self.landmark_runner.run(img_rgb, lmk)
         ret_dct["lmk_crop"] = lmk
 
-        # update a 256x256 version for network input
+        # 创建一个 256x256 版本的裁剪图像，用于网络输入
         ret_dct["img_crop_256x256"] = cv2.resize(ret_dct["img_crop"], (256, 256), interpolation=cv2.INTER_AREA)
+        # 根据裁剪尺寸调整关键点位置
         ret_dct["lmk_crop_256x256"] = ret_dct["lmk_crop"] * 256 / crop_cfg.dsize
 
+        # 返回包含裁剪后图像和关键点信息的字典
         return ret_dct
 
     def crop_driving_video(self, driving_rgb_lst, **kwargs):
