@@ -6,6 +6,8 @@ Pipeline of LivePortrait
 
 import torch
 
+from .utils.viz import viz_lmk
+
 torch.backends.cudnn.benchmark = True  # disable CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR warning
 
 import cv2;
@@ -58,6 +60,11 @@ class LivePortraitPipeline(object):
 
         source_lmk = crop_info['lmk_crop']  # 获取裁剪后的人脸关键点
         img_crop, img_crop_256x256 = crop_info['img_crop'], crop_info['img_crop_256x256']  # 裁剪后的图像和固定大小（256x256）的图像
+        # 保存裁剪后的图像为 img_crop.jpg
+        # 输出日志
+        log(f"裁剪后的图像已保存为 img_crop.jpg。")
+        cv2.imwrite("img_crop.jpg", img_crop)
+        cv2.imwrite("img_crop_256x256.jpg", img_crop_256x256)
 
         # 如果需要裁剪，准备裁剪后的图像；否则，将原始图像强制缩放到256x256
         if inf_cfg.flag_do_crop:
@@ -87,7 +94,7 @@ class LivePortraitPipeline(object):
                 lip_delta_before_animation = self.live_portrait_wrapper.retarget_lip(x_s,
                                                                                      combined_lip_ratio_tensor_before_animation)  # 否则，重新定位嘴唇关键点
 
-        # 处理驾驶信息，包括从模板加载或视频文件中提取数据
+        # 处理驱动信息，包括从模板加载或视频文件中提取数据
         flag_load_from_template = is_template(args.driving_info)  # 判断是否从模板加载
         driving_rgb_crop_256x256_lst = None  # 初始化裁剪后的RGB帧列表
         wfp_template = None  # 初始化模板文件路径
@@ -103,7 +110,7 @@ class LivePortraitPipeline(object):
             log(f'模板的FPS：{output_fps}')
 
             if args.flag_crop_driving_video:
-                log("警告：flag_crop_driving_video为真，但驾驶信息来自模板，因此该选项被忽略。")
+                log("警告：flag_crop_driving_video为真，但驱动信息来自模板，因此该选项被忽略。")
 
         elif osp.exists(args.driving_info) and is_video(args.driving_info):
             # 如果从视频文件加载，并创建运动模板
@@ -115,13 +122,13 @@ class LivePortraitPipeline(object):
                 log(f'{args.driving_info}的FPS是：{output_fps}')
 
             log(f"加载视频文件 (mp4 mov avi等...)：{args.driving_info}")
-            driving_rgb_lst = load_driving_info(args.driving_info)  # 加载驾驶信息
+            driving_rgb_lst = load_driving_info(args.driving_info)  # 加载驱动信息
 
             # 开始创建运动模板
             log("开始创建运动模板...")
             if inf_cfg.flag_crop_driving_video:
                 ret = self.cropper.crop_driving_video(driving_rgb_lst)  # 裁剪视频帧
-                log(f'驾驶视频已裁剪，处理了{len(ret["frame_crop_lst"])}帧。')
+                log(f'驱动视频已裁剪，处理了{len(ret["frame_crop_lst"])}帧。')
                 driving_rgb_crop_lst, driving_lmk_crop_lst = ret['frame_crop_lst'], ret['lmk_crop_lst']  # 分离裁剪后的帧和关键点
                 driving_rgb_crop_256x256_lst = [cv2.resize(_, (256, 256)) for _ in
                                                 driving_rgb_crop_lst]  # 将裁剪后的帧缩放到256x256
@@ -131,7 +138,7 @@ class LivePortraitPipeline(object):
 
             c_d_eyes_lst, c_d_lip_lst = self.live_portrait_wrapper.calc_driving_ratio(
                 driving_lmk_crop_lst)  # 计算眼睛和嘴唇的比例
-            # 准备驾驶视频
+            # 准备驱动视频
             I_d_lst = self.live_portrait_wrapper.prepare_driving_videos(driving_rgb_crop_256x256_lst)
             template_dct = self.make_motion_template(I_d_lst, c_d_eyes_lst, c_d_lip_lst,
                                                      output_fps=output_fps)  # 创建运动模板
@@ -142,7 +149,7 @@ class LivePortraitPipeline(object):
 
             n_frames = I_d_lst.shape[0]  # 获取模板帧数
         else:
-            raise Exception(f"{args.driving_info}不存在或不支持的驾驶信息类型！")
+            raise Exception(f"{args.driving_info}不存在或不支持的驱动信息类型！")
 
         ######## prepare for pasteback ########
         # 准备用于粘贴回去（pasteback）的帧

@@ -111,10 +111,7 @@ class Cropper(object):
             vx_ratio=crop_cfg.vx_ratio,  # X 方向裁剪比例
             vy_ratio=crop_cfg.vy_ratio,  # Y 方向裁剪比例
         )
-        # 保存裁剪后的图像为 img_crop.jpg
-        # 输出日志
-        log(f"裁剪后的图像已保存为 img_crop.jpg。")
-        cv2.imwrite("img_crop.jpg", ret_dct["img_crop"])
+
 
         # 更新关键点信息
         lmk = self.landmark_runner.run(img_rgb, lmk)
@@ -129,88 +126,165 @@ class Cropper(object):
         return ret_dct
 
     def crop_driving_video(self, driving_rgb_lst, **kwargs):
-        """Tracking based landmarks/alignment and cropping"""
+        """
+        根据追踪到的人脸关键点进行对齐和裁剪视频帧
+
+        参数:
+        driving_rgb_lst: 列表，包含每一帧的RGB图像数据
+        **kwargs: 可选参数，如裁剪方向和输出尺寸等
+        """
+
+        # 初始化轨迹对象
         trajectory = Trajectory()
+
+        # 获取裁剪方向，默认为从大到小
         direction = kwargs.get("direction", "large-small")
+
+        # 遍历每一帧图像
         for idx, frame_rgb in enumerate(driving_rgb_lst):
+            # 如果是第一帧或轨迹尚未开始
             if idx == 0 or trajectory.start == -1:
+                # 使用人脸分析器获取人脸信息，包括106个关键点
                 src_face = self.face_analysis_wrapper.get(
-                    contiguous(frame_rgb[..., ::-1]),
+                    contiguous(frame_rgb[..., ::-1]),  # 转换颜色通道顺序
                     flag_do_landmark_2d_106=True,
                     direction=direction,
                 )
+
+                # 检查是否检测到人脸
                 if len(src_face) == 0:
-                    log(f"No face detected in the frame #{idx}")
+                    log(f"第{idx}帧未检测到人脸")
                     continue
+                # 处理多个人脸的情况
                 elif len(src_face) > 1:
-                    log(f"More than one face detected in the driving frame_{idx}, only pick one face by rule {direction}.")
+                    log(f"在驱动视频的第{idx}帧中检测到多于一张人脸，仅根据{direction}规则选择一个。")
+
+                # 取第一个检测到的人脸
                 src_face = src_face[0]
+                # 提取关键点
                 lmk = src_face.landmark_2d_106
+
+                # 运行关键点定位器
                 lmk = self.landmark_runner.run(frame_rgb, lmk)
+
+                # 更新轨迹开始和结束帧索引
                 trajectory.start, trajectory.end = idx, idx
+
+            # 对非首帧进行处理
             else:
+                # 使用上一帧的关键点预测当前帧的关键点位置
                 lmk = self.landmark_runner.run(frame_rgb, trajectory.lmk_lst[-1])
+                # 更新轨迹结束帧索引
                 trajectory.end = idx
 
+            # 将关键点添加到轨迹列表
             trajectory.lmk_lst.append(lmk)
+
+            # 根据关键点计算边界框
             ret_bbox = parse_bbox_from_landmark(
                 lmk,
                 scale=self.crop_cfg.scale_crop_video,
                 vx_ratio_crop_video=self.crop_cfg.vx_ratio_crop_video,
                 vy_ratio=self.crop_cfg.vy_ratio_crop_video,
             )["bbox"]
+
+            # 转换边界框坐标格式
             bbox = [
                 ret_bbox[0, 0],
                 ret_bbox[0, 1],
                 ret_bbox[2, 0],
                 ret_bbox[2, 1],
-            ]  # 4,
-            trajectory.bbox_lst.append(bbox)  # bbox
+            ]
+
+            # 添加边界框到轨迹列表
+            trajectory.bbox_lst.append(bbox)
+
+            # 添加原图到轨迹列表
             trajectory.frame_rgb_lst.append(frame_rgb)
 
+        # 计算全局平均边界框
         global_bbox = average_bbox_lst(trajectory.bbox_lst)
 
+        # 根据全局边界框裁剪图像和关键点
         for idx, (frame_rgb, lmk) in enumerate(zip(trajectory.frame_rgb_lst, trajectory.lmk_lst)):
+            # 裁剪图像
             ret_dct = crop_image_by_bbox(
                 frame_rgb,
                 global_bbox,
                 lmk=lmk,
-                dsize=kwargs.get("dsize", 512),
-                flag_rot=False,
-                borderValue=(0, 0, 0),
+                dsize=kwargs.get("dsize", 512),  # 输出尺寸
+                flag_rot=False,  # 不旋转
+                borderValue=(0, 0, 0),  # 边界填充色
             )
+
+            # 添加裁剪后的图像到轨迹列表
             trajectory.frame_rgb_crop_lst.append(ret_dct["img_crop"])
+
+            # 添加裁剪后关键点到轨迹列表
             trajectory.lmk_crop_lst.append(ret_dct["lmk_crop"])
 
+        # 返回裁剪后的图像和关键点列表
         return {
             "frame_crop_lst": trajectory.frame_rgb_crop_lst,
             "lmk_crop_lst": trajectory.lmk_crop_lst,
         }
 
     def calc_lmks_from_cropped_video(self, driving_rgb_crop_lst, **kwargs):
-        """Tracking based landmarks/alignment"""
+        """
+        从裁剪后的视频帧中计算关键点，基于追踪和对齐算法。
+
+        参数:
+        driving_rgb_crop_lst: 裁剪后的RGB视频帧列表
+        **kwargs: 可变关键字参数，如追踪方向等
+        """
+
+        # 初始化轨迹对象
         trajectory = Trajectory()
+
+        # 获取追踪方向，默认是从大到小
         direction = kwargs.get("direction", "large-small")
 
+        # 遍历裁剪后的每一帧图像
         for idx, frame_rgb_crop in enumerate(driving_rgb_crop_lst):
+            # 如果是第一帧或轨迹尚未开始
             if idx == 0 or trajectory.start == -1:
+                # 使用人脸分析器获取人脸信息，包括106个关键点
                 src_face = self.face_analysis_wrapper.get(
-                    contiguous(frame_rgb_crop[..., ::-1]),  # convert to BGR
+                    contiguous(frame_rgb_crop[..., ::-1]),  # 将RGB转换为BGR
                     flag_do_landmark_2d_106=True,
                     direction=direction,
                 )
+
+                # 检查是否检测到人脸
                 if len(src_face) == 0:
-                    log(f"No face detected in the frame #{idx}")
-                    raise Exception(f"No face detected in the frame #{idx}")
+                    log(f"在第{idx}帧中未检测到人脸")
+                    # 抛出异常，表示没有检测到人脸
+                    raise Exception(f"在第{idx}帧中未检测到人脸")
+
+                # 处理多个人脸的情况
                 elif len(src_face) > 1:
-                    log(f"More than one face detected in the driving frame_{idx}, only pick one face by rule {direction}.")
+                    log(f"在裁剪后的视频帧_{idx}中检测到多于一张人脸，仅根据{direction}规则选择一个。")
+
+                # 取第一个检测到的人脸
                 src_face = src_face[0]
+                # 提取关键点
                 lmk = src_face.landmark_2d_106
+
+                # 运行关键点定位器，更新关键点位置
                 lmk = self.landmark_runner.run(frame_rgb_crop, lmk)
+
+                # 设置轨迹的开始和结束帧索引
                 trajectory.start, trajectory.end = idx, idx
+
+            # 对非首帧进行处理
             else:
+                # 使用上一帧的关键点预测当前帧的关键点位置
                 lmk = self.landmark_runner.run(frame_rgb_crop, trajectory.lmk_lst[-1])
+                # 更新轨迹结束帧索引
                 trajectory.end = idx
 
+            # 将关键点添加到轨迹列表
             trajectory.lmk_lst.append(lmk)
+
+        # 返回轨迹中所有帧的关键点列表
         return trajectory.lmk_lst
