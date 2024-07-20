@@ -4,7 +4,6 @@
 Wrapper for LivePortrait core functions
 """
 
-import contextlib
 import os.path as osp
 import numpy as np
 import cv2
@@ -29,10 +28,7 @@ class LivePortraitWrapper(object):
         if inference_cfg.flag_force_cpu:
             self.device = 'cpu'
         else:
-            if torch.backends.mps.is_available():
-                self.device = 'mps'
-            else:
-                self.device = 'cuda:' + str(self.device_id)
+            self.device = 'cuda:' + str(self.device_id)
 
         model_config = yaml.load(open(inference_cfg.models_config, 'r'), Loader=yaml.SafeLoader)
         # init F
@@ -56,18 +52,10 @@ class LivePortraitWrapper(object):
         # Optimize for inference
         if self.compile:
             torch._dynamo.config.suppress_errors = True  # Suppress errors and fall back to eager execution
-            self.warping_module = torch.compile(self.warping_module, mode='max-autotune')
-            self.spade_generator = torch.compile(self.spade_generator, mode='max-autotune')
-
+            self.warping_module = torch.compile(self.warping_module, mode='max-autotune')  
+            self.spade_generator = torch.compile(self.spade_generator, mode='max-autotune')  
+        
         self.timer = Timer()
-
-    def inference_ctx(self):
-        if self.device == "mps":
-            ctx = contextlib.nullcontext()
-        else:
-            ctx = torch.autocast(device_type=self.device[:4], dtype=torch.float16,
-                                 enabled=self.inference_cfg.flag_use_half_precision)
-        return ctx
 
     def update_config(self, user_args):
         for k, v in user_args.items():
@@ -75,27 +63,47 @@ class LivePortraitWrapper(object):
                 setattr(self.inference_cfg, k, v)
 
     def prepare_source(self, img: np.ndarray) -> torch.Tensor:
-        """ construct the input as standard
-        img: HxWx3, uint8, 256x256
         """
+        将输入图像预处理为模型标准输入格式。
+
+        :param img: 输入图像，格式为 HxWx3，类型为 uint8，尺寸为 256x256。
+        :return: 预处理后的图像，格式为 torch.Tensor，尺寸为 1x3xHxW。
+        """
+        # 获取图像的高度和宽度
         h, w = img.shape[:2]
+
+        # 检查图像尺寸是否符合模型输入尺寸，若不符合则进行缩放
         if h != self.inference_cfg.input_shape[0] or w != self.inference_cfg.input_shape[1]:
+            # 缩放图像至模型输入尺寸
             x = cv2.resize(img, (self.inference_cfg.input_shape[0], self.inference_cfg.input_shape[1]))
         else:
+            # 如果尺寸相符，直接复制图像
             x = img.copy()
 
+        # 检查图像维度
         if x.ndim == 3:
-            x = x[np.newaxis].astype(np.float32) / 255.  # HxWx3 -> 1xHxWx3, normalized to 0~1
+            # 如果是单个图像，增加一个维度并归一化到 0~1
+            x = x[np.newaxis].astype(np.float32) / 255.  # HxWx3 -> 1xHxWx3
         elif x.ndim == 4:
-            x = x.astype(np.float32) / 255.  # BxHxWx3, normalized to 0~1
+            # 如果已经是批量图像，直接归一化到 0~1
+            x = x.astype(np.float32) / 255.  # BxHxWx3
         else:
+            # 如果维度既不是 3 也不是 4，抛出 ValueError
             raise ValueError(f'img ndim should be 3 or 4: {x.ndim}')
-        x = np.clip(x, 0, 1)  # clip to 0~1
-        x = torch.from_numpy(x).permute(0, 3, 1, 2)  # 1xHxWx3 -> 1x3xHxW
+
+        # 确保像素值在 0~1 之间
+        x = np.clip(x, 0, 1)
+
+        # 转换数据类型并改变维度顺序，从 BxHxWx3 到 Bx3xHxW
+        x = torch.from_numpy(x).permute(0, 3, 1, 2)
+
+        # 将数据移动到指定设备（CPU 或 GPU）
         x = x.to(self.device)
+
+        # 返回预处理后的图像
         return x
 
-    def prepare_videos(self, imgs) -> torch.Tensor:
+    def prepare_driving_videos(self, imgs) -> torch.Tensor:
         """ construct the input as standard
         imgs: NxBxHxWx3, uint8
         """
@@ -117,35 +125,49 @@ class LivePortraitWrapper(object):
         """ get the appearance feature of the image by F
         x: Bx3xHxW, normalized to 0~1
         """
-        with torch.no_grad(), self.inference_ctx():
-            feature_3d = self.appearance_feature_extractor(x)
+        with torch.no_grad():
+            with torch.autocast(device_type=self.device[:4], dtype=torch.float16, enabled=self.inference_cfg.flag_use_half_precision):
+                feature_3d = self.appearance_feature_extractor(x)
 
         return feature_3d.float()
 
     def get_kp_info(self, x: torch.Tensor, **kwargs) -> dict:
-        """ get the implicit keypoint information
-        x: Bx3xHxW, normalized to 0~1
-        flag_refine_info: whether to trandform the pose to degrees and the dimention of the reshape
-        return: A dict contains keys: 'pitch', 'yaw', 'roll', 't', 'exp', 'scale', 'kp'
         """
-        with torch.no_grad(), self.inference_ctx():
-            kp_info = self.motion_extractor(x)
+        从输入图像中提取隐含的关键点信息。
 
+        :param x: 输入图像数据，格式为 Bx3xHxW，像素值已经归一化到 0~1。
+        :param kwargs: 可选参数，包括：
+            flag_refine_info: 是否细化信息，包括转换姿态为角度和重塑关键点维度。
+        :return: 包含关键点信息的字典，键包括 'pitch', 'yaw', 'roll', 't', 'exp', 'scale', 'kp'。
+        """
+        # 开始无梯度计算
+        with torch.no_grad():
+            # 使用混合精度计算
+            with torch.autocast(device_type=self.device[:4], dtype=torch.float16,
+                                enabled=self.inference_cfg.flag_use_half_precision):
+                kp_info = self.motion_extractor(x)  # 提取关键点信息
+
+            # 如果使用了半精度计算，将结果转回全精度
             if self.inference_cfg.flag_use_half_precision:
-                # float the dict
                 for k, v in kp_info.items():
                     if isinstance(v, torch.Tensor):
-                        kp_info[k] = v.float()
+                        kp_info[k] = v.float()  # 转换为浮点数
 
+        # 解析可选参数
         flag_refine_info: bool = kwargs.get('flag_refine_info', True)
+
+        # 如果需要细化信息
         if flag_refine_info:
-            bs = kp_info['kp'].shape[0]
+            bs = kp_info['kp'].shape[0]  # 获取批次大小
+            # 将姿态预测转换为角度
             kp_info['pitch'] = headpose_pred_to_degree(kp_info['pitch'])[:, None]  # Bx1
             kp_info['yaw'] = headpose_pred_to_degree(kp_info['yaw'])[:, None]  # Bx1
             kp_info['roll'] = headpose_pred_to_degree(kp_info['roll'])[:, None]  # Bx1
+            # 重塑关键点信息
             kp_info['kp'] = kp_info['kp'].reshape(bs, -1, 3)  # BxNx3
             kp_info['exp'] = kp_info['exp'].reshape(bs, -1, 3)  # BxNx3
 
+        # 返回关键点信息字典
         return kp_info
 
     def get_pose_dct(self, kp_info: dict) -> dict:
@@ -209,27 +231,26 @@ class LivePortraitWrapper(object):
         """
         kp_source: BxNx3
         eye_close_ratio: Bx3
-        Return: Bx(3*num_kp)
+        Return: Bx(3*num_kp+2)
         """
         feat_eye = concat_feat(kp_source, eye_close_ratio)
 
         with torch.no_grad():
             delta = self.stitching_retargeting_module['eye'](feat_eye)
 
-        return delta.reshape(-1, kp_source.shape[1], 3)
+        return delta
 
     def retarget_lip(self, kp_source: torch.Tensor, lip_close_ratio: torch.Tensor) -> torch.Tensor:
         """
         kp_source: BxNx3
         lip_close_ratio: Bx2
-        Return: Bx(3*num_kp)
         """
         feat_lip = concat_feat(kp_source, lip_close_ratio)
 
         with torch.no_grad():
             delta = self.stitching_retargeting_module['lip'](feat_lip)
 
-        return delta.reshape(-1, kp_source.shape[1], 3)
+        return delta
 
     def stitch(self, kp_source: torch.Tensor, kp_driving: torch.Tensor) -> torch.Tensor:
         """
@@ -274,14 +295,15 @@ class LivePortraitWrapper(object):
         kp_driving: BxNx3
         """
         # The line 18 in Algorithm 1: D(W(f_s; x_s, x′_d,i)）
-        with torch.no_grad(), self.inference_ctx():
-            if self.compile:
-                # Mark the beginning of a new CUDA Graph step
-                torch.compiler.cudagraph_mark_step_begin()
-            # get decoder input
-            ret_dct = self.warping_module(feature_3d, kp_source=kp_source, kp_driving=kp_driving)
-            # decode
-            ret_dct['out'] = self.spade_generator(feature=ret_dct['out'])
+        with torch.no_grad():
+            with torch.autocast(device_type=self.device[:4], dtype=torch.float16, enabled=self.inference_cfg.flag_use_half_precision):
+                if self.compile:
+                    # Mark the beginning of a new CUDA Graph step
+                    torch.compiler.cudagraph_mark_step_begin()
+                # get decoder input
+                ret_dct = self.warping_module(feature_3d, kp_source=kp_source, kp_driving=kp_driving)
+                # decode
+                ret_dct['out'] = self.spade_generator(feature=ret_dct['out'])
 
             # float the dict
             if self.inference_cfg.flag_use_half_precision:
@@ -301,10 +323,10 @@ class LivePortraitWrapper(object):
 
         return out
 
-    def calc_ratio(self, lmk_lst):
+    def calc_driving_ratio(self, driving_lmk_lst):
         input_eye_ratio_lst = []
         input_lip_ratio_lst = []
-        for lmk in lmk_lst:
+        for lmk in driving_lmk_lst:
             # for eyes retargeting
             input_eye_ratio_lst.append(calc_eye_close_ratio(lmk[None]))
             # for lip retargeting
@@ -320,9 +342,24 @@ class LivePortraitWrapper(object):
         return combined_eye_ratio_tensor
 
     def calc_combined_lip_ratio(self, c_d_lip_i, source_lmk):
+        """
+        计算源和目标唇部闭合比率的组合比率。
+
+        :param c_d_lip_i: 目标唇部闭合比率。
+        :param source_lmk: 源面部标志点，用于计算源唇部闭合比率。
+        :return: 组合唇部比率的张量，形状为 1x2，其中包含源唇部比率和目标唇部比率。
+        """
+        # 计算源唇部闭合比率
         c_s_lip = calc_lip_close_ratio(source_lmk[None])
+
+        # 将源唇部闭合比率转换为张量，并移动到指定设备
         c_s_lip_tensor = torch.from_numpy(c_s_lip).float().to(self.device)
-        c_d_lip_i_tensor = torch.Tensor([c_d_lip_i[0]]).to(self.device).reshape(1, 1) # 1x1
-        # [c_s,lip, c_d,lip,i]
-        combined_lip_ratio_tensor = torch.cat([c_s_lip_tensor, c_d_lip_i_tensor], dim=1) # 1x2
+
+        # 将目标唇部闭合比率转换为张量，并调整形状
+        c_d_lip_i_tensor = torch.Tensor([c_d_lip_i[0]]).to(self.device).reshape(1, 1)  # 1x1
+
+        # 沿着第二个维度拼接源唇部比率和目标唇部比率张量
+        combined_lip_ratio_tensor = torch.cat([c_s_lip_tensor, c_d_lip_i_tensor], dim=1)  # 1x2
+
+        # 返回组合后的唇部比率张量
         return combined_lip_ratio_tensor
